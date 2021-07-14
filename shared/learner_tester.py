@@ -1,10 +1,12 @@
-from typing import List
+from typing import List, Optional
 
+import logging
 import numpy as np
 from gym.core import Env
-from torch import Tensor
 
 from shared.learner import Learner
+
+logger = logging.getLogger(__name__)
 
 
 class LearnerTester():
@@ -22,27 +24,37 @@ class LearnerTester():
         episode_rewards: List[float] = []
 
         for i_episode in range(self.episode_count):
-            observation: np.ndarray = env.reset()
-            rewards: List[float] = []
-            action_probs: List[Tensor] = []
+            episode_reward: float = self.test_episode(env, i_episode)
+            episode_rewards.append(episode_reward)
 
-            for t in range(self.max_episode_length):
-                env.render()
-                action, prob = self.learner.get_action(observation)
-                # print(observation, action)
-                observation, reward, done, _ = env.step(action)
-                # print(observation, reward)
-
-                action_probs.append(prob)
-                rewards.append(reward)
-
-                if done or t == self.max_episode_length - 1:
-                    episode_rewards.append(sum(rewards))
-                    print(f"Episode {i_episode} finished after {t + 1} steps")
-                    print(f"Episode {i_episode} total reward: {sum(rewards)}")
-
-                    self.learner.update_policy(rewards, action_probs)
-                    break
-
-        env.close()
         return episode_rewards
+
+    def test_episode(self, env: Env, i_episode: int) -> float:
+        observation: Optional[np.ndarray] = env.reset()
+        rewards: List[float] = []
+
+        self.learner.start_episode()
+
+        t: int = 0
+        for t in range(self.max_episode_length):
+            env.render()
+            action = self.learner.get_action(observation)
+            logger.info('Get action result: %s', action)
+            observation, reward, done, info = env.step(action)
+            logger.info('Observation: %s , Reward: %f , Done: %s',
+                        observation, reward, done)
+            logger.info('Info: %s', info)
+            self.learner.set_time_step_reward(t, reward)
+
+            rewards.append(reward)
+
+            if done:
+                observation = None
+                break
+
+        episode_reward: float = sum(rewards)
+        logger.info('Episode %i finished after %i steps', i_episode, t + 1)
+        logger.info('Episode %i total reward: %f', i_episode, episode_reward)
+
+        self.learner.end_episode(observation)
+        return episode_reward

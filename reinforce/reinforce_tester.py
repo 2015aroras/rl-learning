@@ -7,9 +7,10 @@ from reinforce.reinforce_learner import ReinforceLearner
 
 LR = 0.01
 DISCOUNT = 0.9
-EPISODE_COUNT = 100
-MAX_EPISODE_LENGTH = 10000
-ENV = 'Acrobot-v1'
+EPISODE_COUNT = 150
+MAX_EPISODE_LENGTH = 500
+# ENV = 'Acrobot-v1'
+ENV = 'BipedalWalker-v3'
 # ENV = 'CartPole-v0'
 # ENV = 'Pendulum-v0'
 # ENV = 'FrozenLake-v0'
@@ -30,6 +31,7 @@ def main() -> None:
         EPISODE_COUNT,
         MAX_EPISODE_LENGTH)
     episode_rewards = reinforce_tester.test(env)
+    env.close()
 
     past_10_rewards_mean = [np.mean(episode_rewards[t-9:t+1])
                             for t in range(len(episode_rewards))]

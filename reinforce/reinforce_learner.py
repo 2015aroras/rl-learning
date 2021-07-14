@@ -8,11 +8,12 @@ from torch import nn
 from torch.functional import Tensor
 from torch.nn.parameter import Parameter
 
-from shared.utils import Utils
+from shared.episode_state import EpisodeState
 from shared.learner import Learner
+from shared.utils import Utils
 
 
-class PolicyNetwork(nn.Module):
+class _PolicyNetwork(nn.Module):
     def __init__(self, input_dim: int, hidden_dim: int, output_dim: int):
         super().__init__()
 
@@ -27,6 +28,37 @@ class PolicyNetwork(nn.Module):
         super().zero_grad(set_to_none=set_to_none)
         self.fc_layer1.zero_grad(set_to_none=set_to_none)
         self.fc_layer2.zero_grad(set_to_none=set_to_none)
+
+
+class _ActionData():
+    def __init__(self,
+                 time: int,
+                 probability: Optional[Tensor] = None,
+                 reward: Optional[float] = None):
+        self.__time = time
+        self.__probability = probability
+        self.__reward = reward
+
+    def get_time(self) -> int:
+        return self.__time
+
+    def get_probability(self) -> Tensor:
+        if self.__probability is None:
+            raise RuntimeError('Probability is not initialized.')
+
+        return self.__probability
+
+    def set_probability(self, probability: Tensor) -> None:
+        self.__probability = probability
+
+    def get_reward(self) -> float:
+        if self.__reward is None:
+            raise RuntimeError('Reward is not initialized.')
+
+        return self.__reward
+
+    def set_reward(self, reward: float) -> None:
+        self.__reward = reward
 
 
 class ReinforceLearner(Learner):
@@ -44,37 +76,61 @@ class ReinforceLearner(Learner):
         if hidden_dim is None:
             hidden_dim = max(input_dim, output_dim)
 
-        self.policy_network = PolicyNetwork(input_dim, hidden_dim, output_dim)
+        self.policy_network = _PolicyNetwork(input_dim, hidden_dim, output_dim)
         self.discount = discount
         self.lr = lr
 
-    def get_action(self, state: Any) -> Tuple[Any, Tensor]:
+        self.episode_state: EpisodeState = EpisodeState.FINISHED
+        self.episode_actions: List[_ActionData] = []
+
+    def start_episode(self) -> None:
+        if self.episode_state is not EpisodeState.FINISHED:
+            raise RuntimeError('Cannot start new episode while previous episode is unfinished.')
+
+        self.episode_state = EpisodeState.IN_PROGRESS
+        self.episode_actions = []
+
+    def set_time_step_reward(self, time: int, reward: float) -> None:
+        if self.episode_state is not EpisodeState.IN_PROGRESS:
+            raise RuntimeError('Cannot set reward while episode is not in progress.')
+
+        if len(self.episode_actions) < time:
+            raise RuntimeError(f'No action has been taken for the given time: {time}')
+
+        action_data: _ActionData = self.episode_actions[time]
+        action_data.set_reward(reward)
+
+    def end_episode(self) -> None:
+        if self.episode_state is not EpisodeState.IN_PROGRESS:
+            raise RuntimeError('Cannot end episode if episode is not in progress.')
+
+        self.__update_policy()
+
+        self.episode_state = EpisodeState.FINISHED
+        self.episode_actions = []
+
+    def get_action(self, state: Any) -> Any:
         nn_input: Tensor = self._parse_state(state).float()
-        output_probabilities: Tensor = torch.reshape(
-            self.policy_network.forward(nn_input),
-            self.discretized_action_space.shape)
+        output_probabilities: Tensor = self.policy_network.forward(nn_input)
 
-        action: List[Any] = []
-        action_probability: Tensor = torch.tensor(1.0)
-        for i_dim in range(self.discretized_action_space.shape[0]):
-            np_out_probs: np.ndarray = output_probabilities[i_dim].detach().numpy()
+        np_out_probs: np.ndarray = output_probabilities.detach().numpy()
+        action_index: int = np.random.choice(
+            np.arange(np.size(np_out_probs)),
+            p=np_out_probs)
 
-            index: int = np.random.choice(
-                np.arange(np.size(np_out_probs)),
-                p=np_out_probs)
+        action = self._get_action_from_index(action_index)
 
-            dim_action = self.discretized_action_space[i_dim, index]
-            action.append(dim_action.item())
+        time: int = len(self.episode_actions)
+        action_probability: Tensor = output_probabilities[action_index]
+        action_data: _ActionData = _ActionData(time, probability=action_probability)
+        self.episode_actions.append(action_data)
 
-            action_probability *= output_probabilities[i_dim, index]
+        return action
 
-        # If action space is 0d, change to 0d
-        if self.action_space.shape == tuple():
-            action = action[0]
+    def __update_policy(self):
+        rewards: List[float] = [action.get_reward() for action in self.episode_actions]
+        action_probs: List[Tensor] = [action.get_probability() for action in self.episode_actions]
 
-        return (action, action_probability)
-
-    def update_policy(self, rewards: List[float], action_probs: List[Tensor]):
         utilities: Tensor = Utils.get_utilities(rewards, self.discount)
         whitened_utilities: Tensor = (utilities - utilities.mean()) / (utilities.std() + 1e-9)
 
