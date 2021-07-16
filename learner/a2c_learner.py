@@ -9,8 +9,8 @@ from torch.functional import Tensor
 from torch.nn import functional as F
 from torch.nn.parameter import Parameter
 
-from shared.episode_state import EpisodeState
-from shared.learner import Learner
+from learner.shared.episode_state import EpisodeState
+from learner.shared.base_learner import Learner
 
 
 PolicyUpdate = Dict[Parameter, Tensor]
@@ -103,14 +103,12 @@ class A2CLearner(Learner):
     def __init__(self,
                  observation_space: Space,
                  action_space: Space,
-                 max_episode_len: int = 1000,
                  max_workers: int = 5,
                  discount: float = 0.9,
                  lr: float = 0.01):
 
         super().__init__(observation_space, action_space)
 
-        self.max_episode_len = max_episode_len
         self.discount = discount
         self.lr = lr
 

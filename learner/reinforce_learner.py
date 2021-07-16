@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 import torch
@@ -8,9 +8,9 @@ from torch import nn
 from torch.functional import Tensor
 from torch.nn.parameter import Parameter
 
-from shared.episode_state import EpisodeState
-from shared.learner import Learner
-from shared.utils import Utils
+from learner.shared.episode_state import EpisodeState
+from learner.shared.base_learner import Learner
+from learner.shared.utils import Utils
 
 
 class _PolicyNetwork(nn.Module):
@@ -100,7 +100,7 @@ class ReinforceLearner(Learner):
         action_data: _ActionData = self.episode_actions[time]
         action_data.set_reward(reward)
 
-    def end_episode(self) -> None:
+    def end_episode(self, _: Optional[Any] = None) -> None:
         if self.episode_state is not EpisodeState.IN_PROGRESS:
             raise RuntimeError('Cannot end episode if episode is not in progress.')
 

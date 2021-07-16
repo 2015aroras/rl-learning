@@ -4,7 +4,7 @@ import logging
 import numpy as np
 from gym.core import Env
 
-from shared.learner import Learner
+from learner.shared import Learner
 
 logger = logging.getLogger(__name__)
 
