@@ -1,5 +1,6 @@
-from typing import Any, Dict, List, Optional, Tuple
+import logging
 import typing
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -9,12 +10,20 @@ from torch.functional import Tensor
 from torch.nn import functional as F
 from torch.nn.parameter import Parameter
 
-from learner.shared.episode_state import EpisodeState
 from learner.shared.base_learner import Learner
-
+from learner.shared.episode_state import EpisodeState
 
 PolicyUpdate = Dict[Parameter, Tensor]
 ValueUpdate = Dict[Parameter, Tensor]
+
+logger = logging.getLogger(__name__)
+
+
+DEFAULT_WORKER_COUNT: int = 5
+DEFAULT_DISCOUNT: float = 0.99
+DEFAULT_LR: float = 1e-3
+DEFAULT_ENTROPY_REGULARIZER: float = 1e-2
+DEFAULT_UPDATE_INTERVAL: int = 5
 
 
 class PolicyNetwork(nn.Module):
@@ -46,10 +55,12 @@ class _ActionData():
     def __init__(self,
                  time: int,
                  probability: Optional[Tensor] = None,
+                 entropy: Optional[Tensor] = None,
                  reward: Optional[float] = None,
                  state_value: Optional[Tensor] = None):
         self.__time = time
         self.__probability = probability
+        self.__entropy = entropy
         self.__reward = reward
         self.__state_value = state_value
 
@@ -64,6 +75,15 @@ class _ActionData():
 
     def set_probability(self, probability: Tensor) -> None:
         self.__probability = probability
+
+    def get_entropy(self) -> Tensor:
+        if self.__entropy is None:
+            raise RuntimeError('Entropy is not initialized.')
+
+        return self.__entropy
+
+    def set_entropy(self, entropy: Tensor) -> None:
+        self.__entropy = entropy
 
     def get_reward(self) -> float:
         if self.__reward is None:
@@ -87,9 +107,16 @@ class _ActionData():
 class _WorkerData(List[_ActionData]):
     def __init__(self):
         super().__init__()
-        self.__final_state_value: Optional[Any] = None
+        self.__final_state_value: Optional[Tensor] = None
+        self.__episode_state: EpisodeState = EpisodeState.IN_PROGRESS
 
-    def get_final_state_value(self) -> Any:
+    def get_episode_state(self) -> EpisodeState:
+        return self.__episode_state
+
+    def set_episode_state(self, episode_state: EpisodeState) -> None:
+        self.__episode_state = episode_state
+
+    def get_final_state_value(self) -> Tensor:
         if self.__final_state_value is None:
             raise RuntimeError('Final state value is not initialized.')
 
@@ -103,14 +130,22 @@ class A2CLearner(Learner):
     def __init__(self,
                  observation_space: Space,
                  action_space: Space,
-                 max_workers: int = 5,
-                 discount: float = 0.9,
-                 lr: float = 0.01):
+                 worker_count: Optional[int] = None,
+                 discount: Optional[float] = None,
+                 lr: Optional[float] = None,
+                 entropy_regularizer: Optional[float] = None,
+                 update_interval: Optional[int] = None):
 
         super().__init__(observation_space, action_space)
 
-        self.discount = discount
-        self.lr = lr
+        self.discount: float = DEFAULT_DISCOUNT if discount is None else discount
+        self.lr: float = DEFAULT_LR if lr is None else lr
+        self.entropy_regularizer: float = (DEFAULT_ENTROPY_REGULARIZER
+                                           if entropy_regularizer is None
+                                           else entropy_regularizer)
+        self.update_interval: int = (DEFAULT_UPDATE_INTERVAL
+                                     if update_interval is None
+                                     else update_interval)
 
         input_dim: int = self._get_observation_space_dim()
         output_dim: int = self._get_action_space_size()
@@ -118,51 +153,43 @@ class A2CLearner(Learner):
 
         self.policy_network = PolicyNetwork(input_dim, hidden_dim, output_dim)
 
-        self.episode_state: EpisodeState = EpisodeState.FINISHED
+        self.worker_count: int = DEFAULT_WORKER_COUNT if worker_count is None else worker_count
         self.worker_data_list: List[_WorkerData] = []
-        self.max_workers = max_workers
+        self.__reset_workers()
+        self.i_worker: int = 0
+
+    def get_current_worker(self) -> _WorkerData:
+        return self.worker_data_list[self.i_worker]
 
     def start_episode(self) -> None:
-        if self.episode_state is EpisodeState.FINISHED:
-            self.episode_state = EpisodeState.IN_PROGRESS
-            self.worker_data_list = []
-            self.__start_next_worker()
-        elif self.episode_state is EpisodeState.IN_PROGRESS:
-            self.__start_next_worker()
-        else:
-            raise RuntimeError(f'Unsupported episode state: {self.episode_state}')
+        # worker: _WorkerData = self.get_current_worker()
+        # if worker.get_episode_state() is EpisodeState.FINISHED:
+        #     self.worker_data_list[self.i_worker] = _WorkerData()
+        pass
 
-    def __start_next_worker(self) -> None:
-        if len(self.worker_data_list) != 0 and len(self.worker_data_list[-1]) == 0:
-            raise RuntimeError('Previous worker has done work for no time.')
-
-        worker_data: _WorkerData = _WorkerData()
-        self.worker_data_list.append(worker_data)
-
-    def set_time_step_reward(self, time: int, reward: float) -> None:
-        if self.episode_state is not EpisodeState.IN_PROGRESS:
+    def set_last_action_results(self,
+                                reward: float,
+                                observation: Any,
+                                done: bool) -> None:
+        worker_data: _WorkerData = self.get_current_worker()
+        if worker_data.get_episode_state() is not EpisodeState.IN_PROGRESS:
             raise RuntimeError('Cannot set reward while episode is not in progress.')
 
-        worker_data: _WorkerData = self.worker_data_list[-1]
+        worker_data[-1].set_reward(reward)
+        if len(worker_data) == self.update_interval and not done:
+            _, val_output = self.__forward(observation)
+            worker_data.set_final_state_value(val_output)
 
-        if len(worker_data) < time:
-            raise RuntimeError(f'Current worker has not worked for the given time: {time}')
+            self.__next_worker()
 
-        worker_data[time].set_reward(reward)
-
-    def end_episode(self, final_state: Optional[Any] = None) -> None:
-        if self.episode_state is not EpisodeState.IN_PROGRESS:
+    def end_episode(self) -> None:
+        worker: _WorkerData = self.get_current_worker()
+        if worker.get_episode_state() is not EpisodeState.IN_PROGRESS:
             raise RuntimeError('Cannot end episode if episode is not in progress.')
 
-        final_state_value: Tensor = torch.tensor(0)
-        if final_state is not None:
-            _, val_output = self.__forward(final_state)
-            final_state_value = val_output
-        self.worker_data_list[-1].set_final_state_value(final_state_value)
-
-        if len(self.worker_data_list) >= self.max_workers:
-            self.episode_state = EpisodeState.FINISHED
-            self.__update_policy()
+        worker.set_final_state_value(torch.tensor(0))
+        worker.set_episode_state(EpisodeState.FINISHED)
+        self.__next_worker()
 
     def get_action(self, state: Any) -> Any:
         pol_output, val_output = self.__forward(state)
@@ -171,7 +198,7 @@ class A2CLearner(Learner):
             np.arange(np.size(np_out_probs)),
             p=np_out_probs)
 
-        worker_data: _WorkerData = self.worker_data_list[-1]
+        worker_data: _WorkerData = self.get_current_worker()
         worker_time: int = len(worker_data)
 
         action = self._get_action_from_index(action_index)
@@ -179,83 +206,118 @@ class A2CLearner(Learner):
         action_data: _ActionData = _ActionData(
             worker_time,
             probability=action_probability,
+            entropy=A2CLearner.__get_entropy(pol_output),
             state_value=val_output)
         worker_data.append(action_data)
 
         return action
+
+    def __next_worker(self) -> None:
+        if len(self.worker_data_list[self.i_worker]) == 0:
+            raise RuntimeError('Previous worker has done work for no time:', self.i_worker)
+
+        if self.i_worker == self.worker_count - 1:
+            self.__update_policy()
+            self.__reset_workers()
+
+        self.i_worker = (self.i_worker + 1) % self.worker_count
+
+    def __reset_workers(self) -> None:
+        self.worker_data_list = [
+            _WorkerData() for _ in range(self.worker_count)
+        ]
 
     def __forward(self, state: Any) -> Tuple[Tensor, Tensor]:
         nn_input: Tensor = self._parse_state(state).float()
         nn_output: Tensor = self.policy_network.forward(nn_input)
 
         split_output = torch.split(nn_output, self._get_action_space_size())
-        # print(split_output)
         if len(split_output) != 2:
-            raise RuntimeError(f'Split output has incorrect size: {len(split_output)}')
+            raise RuntimeError(f'Split output has incorrect size: {split_output}')
         return typing.cast(Tuple[Tensor, Tensor], split_output)
 
     def __update_policy(self) -> None:
-        if self.episode_state is not EpisodeState.FINISHED:
-            raise RuntimeError('Cannot update policy unless episode is finished.')
+        if self.i_worker != self.worker_count - 1:
+            raise RuntimeError('Cannot update policy until last worker is done. '
+                               f'Current worker is {self.i_worker}')
 
         worker_updates: List[Tuple[PolicyUpdate, ValueUpdate]] = [
             self.__get_updates_from_worker(worker_data) for worker_data in self.worker_data_list
         ]
 
-        for weight in self.policy_network.parameters():
+        for weights in self.policy_network.parameters():
             with torch.no_grad():
                 # print('Weight before:', weight)
                 for update in worker_updates:
                     policy_update, value_update = update
 
-                    if weight in policy_update:
-                        weight += self.lr * policy_update[weight]
+                    if weights in policy_update:
+                        weights += policy_update[weights]
 
-                    if weight in value_update:
-                        weight -= self.lr * value_update[weight]
+                    if weights in value_update:
+                        weights += value_update[weights]
 
                 # print('Weight after:', weight)
 
         # for weight in self.policy_network.parameters():
         #     print(weight)
 
-    def __get_updates_from_worker(self, worker_data: _WorkerData) -> Tuple[PolicyUpdate, ValueUpdate]:
+    def __get_updates_from_worker(self,
+                                  worker_data: _WorkerData
+                                  ) -> Tuple[PolicyUpdate, ValueUpdate]:
         policy_update: PolicyUpdate = {}
         value_update: ValueUpdate = {}
+        for weights in self.policy_network.parameters():
+            policy_update[weights] = torch.zeros(weights.shape)
+            value_update[weights] = torch.zeros(weights.shape)
 
         utility: Tensor = worker_data.get_final_state_value()
         for action_data in reversed(worker_data):
             utility = action_data.get_reward() + self.discount * utility
             action_advantage: Tensor = utility - action_data.get_state_value()
-            # print('Utility', utility)
-            # print('State value', action_data.get_state_value())
-            # print('Action advantage:', action_advantage)
+            # print('Action advantage', action_advantage)
+            logger.info('Action advantage: %f', action_advantage)
+            logger.debug('Policy entropy: %f', action_data.get_entropy())
 
-            # Policy update
+            # Policy update (without entropy adjustment)
             log_action_prob = torch.log(action_data.get_probability())
             self.policy_network.zero_grad()
             log_action_prob.backward(retain_graph=True)
-            for weight in self.policy_network.parameters():
-                if weight.grad is None:
-                    raise RuntimeError(f'Gradient is none for weight: {weight}')
+            for weights in self.policy_network.parameters():
+                if weights.grad is None:
+                    raise RuntimeError(f'Gradient is none for weights: {weights}')
 
-                weight_update: Tensor = weight.grad * action_advantage
-                if weight not in policy_update:
-                    policy_update[weight] = weight_update
-                else:
-                    policy_update[weight] += weight_update
+                weights_update: Tensor = self.lr * weights.grad * action_advantage
+                policy_update[weights] += weights_update
+
+            # Entropy adjustment of policy update
+            policy_entropy = action_data.get_entropy()
+            self.policy_network.zero_grad()
+            policy_entropy.backward(retain_graph=True)
+            for weights in self.policy_network.parameters():
+                if weights.grad is None:
+                    raise RuntimeError(f'Gradient is none for weights: {weights}')
+
+                weights_update: Tensor = self.lr * self.entropy_regularizer * weights.grad
+                policy_update[weights] += weights_update
 
             # Value update
             squared_action_advantage: Tensor = action_advantage ** 2
             self.policy_network.zero_grad()
             squared_action_advantage.backward(retain_graph=True)
-            for weight in self.policy_network.parameters():
-                if weight.grad is None:
-                    raise RuntimeError(f'Gradient is none for weight: {weight}')
+            for weights in self.policy_network.parameters():
+                if weights.grad is None:
+                    raise RuntimeError(f'Gradient is none for weight: {weights}')
 
-                if weight not in value_update:
-                    value_update[weight] = weight.grad
-                else:
-                    value_update[weight] += weight.grad
+                weights_update: Tensor = -1 * self.lr * weights.grad
+                value_update[weights] += weights_update
 
         return (policy_update, value_update)
+
+    @staticmethod
+    def __get_entropy(pol_output: Tensor) -> Tensor:
+        non_zero_pol_output = pol_output[pol_output.nonzero(as_tuple=True)]
+        entropy: Tensor = -torch.sum(
+            torch.mul(non_zero_pol_output, torch.log(non_zero_pol_output)))
+        logger.info('Entropy: %f', entropy)
+        return entropy

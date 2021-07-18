@@ -12,6 +12,9 @@ from learner.shared.episode_state import EpisodeState
 from learner.shared.base_learner import Learner
 from learner.shared.utils import Utils
 
+DEFAULT_DISCOUNT: float = 0.9
+DEFAULT_LR: float = 0.01
+
 
 class _PolicyNetwork(nn.Module):
     def __init__(self, input_dim: int, hidden_dim: int, output_dim: int):
@@ -66,19 +69,18 @@ class ReinforceLearner(Learner):
                  observation_space: Space,
                  action_space: Space,
                  hidden_dim: Optional[int] = None,
-                 discount: float = 0.9,
-                 lr: float = 0.01):
+                 discount: Optional[float] = None,
+                 lr: Optional[float] = None):
 
         super().__init__(observation_space, action_space)
 
         input_dim: int = self._get_observation_space_dim()
         output_dim: int = self._get_action_space_size()
-        if hidden_dim is None:
-            hidden_dim = max(input_dim, output_dim)
+        hidden_dim = max(input_dim, output_dim) if hidden_dim is None else hidden_dim
 
         self.policy_network = _PolicyNetwork(input_dim, hidden_dim, output_dim)
-        self.discount = discount
-        self.lr = lr
+        self.discount = DEFAULT_DISCOUNT if discount is None else discount
+        self.lr = DEFAULT_LR if lr is None else lr
 
         self.episode_state: EpisodeState = EpisodeState.FINISHED
         self.episode_actions: List[_ActionData] = []
@@ -90,17 +92,17 @@ class ReinforceLearner(Learner):
         self.episode_state = EpisodeState.IN_PROGRESS
         self.episode_actions = []
 
-    def set_time_step_reward(self, time: int, reward: float) -> None:
+    def set_last_action_results(self,
+                                reward: float,
+                                observation: Any,
+                                done: bool) -> None:
         if self.episode_state is not EpisodeState.IN_PROGRESS:
             raise RuntimeError('Cannot set reward while episode is not in progress.')
 
-        if len(self.episode_actions) < time:
-            raise RuntimeError(f'No action has been taken for the given time: {time}')
-
-        action_data: _ActionData = self.episode_actions[time]
+        action_data: _ActionData = self.episode_actions[-1]
         action_data.set_reward(reward)
 
-    def end_episode(self, _: Optional[Any] = None) -> None:
+    def end_episode(self) -> None:
         if self.episode_state is not EpisodeState.IN_PROGRESS:
             raise RuntimeError('Cannot end episode if episode is not in progress.')
 

@@ -1,7 +1,7 @@
 import abc
 from abc import abstractmethod
 import logging
-from typing import Any, List, Optional, Union
+from typing import Any, List, Union
 
 import numpy as np
 import torch
@@ -37,21 +37,24 @@ class Learner(abc.ABC):
         '''
 
     @abstractmethod
-    def set_time_step_reward(self, time: int, reward: float) -> None:
-        '''
-        Tells the learner the reward for the action taken at the given time.
-        '''
-
-    @abstractmethod
-    def end_episode(self, final_state: Optional[Any] = None) -> None:
-        '''
-        Indicates to the learner that the current episode has ended.
-        '''
-
-    @abstractmethod
     def get_action(self, state: Any) -> Any:
         '''
         Gets the action chosen by the learner for the given state.
+        '''
+
+    @abstractmethod
+    def set_last_action_results(self,
+                                reward: float,
+                                observation: Any,
+                                done: bool) -> None:
+        '''
+        Tells the learner the result of the last action given by the learner.
+        '''
+
+    @abstractmethod
+    def end_episode(self) -> None:
+        '''
+        Indicates to the learner that the current episode has ended.
         '''
 
     def _get_observation_space_dim(self) -> int:
@@ -93,7 +96,7 @@ class Learner(abc.ABC):
         if isinstance(self.action_space, Discrete):
             return action_index
         if isinstance(self.action_space, Box):
-            if len(self.action_space.shape) != 1:
+            if len(space.shape) != 1:
                 raise RuntimeError('Only supporting 1d boxes for now')
 
             dim_steps: int = self.discretized_dim_steps
@@ -102,7 +105,7 @@ class Learner(abc.ABC):
             for i_dim in range(n_dim):
                 dim_index = (action_index // (dim_steps ** (n_dim - 1 - i_dim))) % dim_steps
                 dim_action_space: np.ndarray = np.linspace(
-                    space.low[i_dim], space.high[i_dim], dim_steps, -1)
+                    space.low[i_dim], space.high[i_dim], num=dim_steps, axis=-1)
                 action.append(dim_action_space[dim_index])
 
             return np.squeeze(action).tolist()
