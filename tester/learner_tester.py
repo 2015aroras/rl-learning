@@ -34,8 +34,7 @@ class LearnerTester(abc.ABC):
         i_step: int = 0
         for i_step in range(max_episode_length):
             env.render(render_mode)
-            observation, reward, done = self._test_step(env,
-                                                        observation)
+            observation, reward, done = self._test_step(env, observation)
 
             rewards.append(reward)
 

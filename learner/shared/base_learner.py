@@ -108,6 +108,6 @@ class Learner(abc.ABC):
                     space.low[i_dim], space.high[i_dim], num=dim_steps, axis=-1)
                 action.append(dim_action_space[dim_index])
 
-            return np.squeeze(action).tolist()
+            return np.atleast_1d(np.squeeze(action)).tolist()
 
         raise RuntimeError(f'Unsupported space: {type(space)}')
