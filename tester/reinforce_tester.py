@@ -1,5 +1,5 @@
 import logging
-from typing import List
+from typing import Generator
 
 import gym
 from gym.core import Env
@@ -27,17 +27,12 @@ class ReinforceTester(LearnerTester):
         self.max_episode_length = max_episode_length
         self.render_mode = render_mode
 
-    def test(self) -> List[float]:
+    def test(self) -> Generator[float, None, None]:
         '''
         Tests the learner.
         '''
-        episode_rewards: List[float] = []
-
         for i_episode in range(self.episode_count):
-            episode_reward: float = self._test_episode(self.env,
-                                                       self.max_episode_length,
-                                                       i_episode,
-                                                       self.render_mode)
-            episode_rewards.append(episode_reward)
-
-        return episode_rewards
+            yield self._test_episode(self.env,
+                                     self.max_episode_length,
+                                     i_episode,
+                                     self.render_mode)

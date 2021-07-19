@@ -1,7 +1,7 @@
 import abc
 import logging
 from abc import abstractmethod
-from typing import Any, List, Tuple
+from typing import Any, Generator, List, Tuple
 
 import numpy as np
 from gym.core import Env
@@ -16,7 +16,7 @@ class LearnerTester(abc.ABC):
         self.learner = learner
 
     @abstractmethod
-    def test(self) -> List[float]:
+    def test(self) -> Generator[float, None, None]:
         '''
         Tests the learner.
         '''

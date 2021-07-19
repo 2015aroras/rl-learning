@@ -1,4 +1,4 @@
-from typing import Any, List
+from typing import Any, Generator, List
 
 import logging
 import typing
@@ -30,11 +30,10 @@ class A2CTester(LearnerTester):
         self.max_episode_length: int = max_episode_length
         self.render_mode: str = render_mode
 
-    def test(self) -> List[float]:
+    def test(self) -> Generator[float, None, None]:
         workers_env: List[Env] = [self.main_env] + [
             gym.make(self.env_name) for _ in range(self.worker_count - 1)]
         workers_observation: List[Any] = [env.reset() for env in workers_env]
-        main_env_episodes_reward: List[float] = []
         main_env_curr_episode_reward: List[float] = []
 
         i_episode: int = 0
@@ -66,8 +65,7 @@ class A2CTester(LearnerTester):
                 i_episode += 1
                 workers_i_time[i_worker] = 0
                 if i_worker == 0:
-                    main_env_episodes_reward.append(
-                        sum(main_env_curr_episode_reward))
+                    yield sum(main_env_curr_episode_reward)
                     main_env_curr_episode_reward = []
 
             else:
@@ -75,5 +73,3 @@ class A2CTester(LearnerTester):
 
         for worker_env in workers_env:
             worker_env.close()
-
-        return main_env_episodes_reward

@@ -2,7 +2,7 @@ import enum
 import logging
 import typing
 from argparse import ArgumentParser, Namespace
-from typing import List, Optional
+from typing import Generator, List, Optional
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -31,7 +31,6 @@ class LearnerType(enum.Enum):
 
 
 def test_learner(learner_type: LearnerType, args: Namespace) -> None:
-    episode_rewards: List[float] = []
     learner_tester: LearnerTester
     if learner_type == LearnerType.A2C:
         learner_tester = A2CTester(
@@ -46,16 +45,22 @@ def test_learner(learner_type: LearnerType, args: Namespace) -> None:
     else:
         raise NotImplementedError(f'Learner type not yet supported: {learner_type}')
 
-    episode_rewards = learner_tester.test()
-
-    past_10_rewards_mean = [np.mean(episode_rewards[max(t-9, 0):t+1])
-                            for t in range(len(episode_rewards))]
-
-    plt.plot(episode_rewards)
-    plt.plot(past_10_rewards_mean)
+    plt.ion()
     plt.xlabel('Episode')
     plt.ylabel('Total Reward')
-    plt.show()
+
+    episode_rewards: Generator[float, None, None] = learner_tester.test()
+    y_episode_rewards: List[float] = []
+    for episode_reward in episode_rewards:
+        y_episode_rewards.append(episode_reward)
+
+        past_10_rewards_mean = [np.mean(y_episode_rewards[max(t-9, 0):t+1])
+                                for t in range(len(y_episode_rewards))]
+
+        plt.plot(y_episode_rewards)
+        plt.plot(past_10_rewards_mean)
+
+    plt.show(block=True)
 
 
 def get_arg_parser() -> ArgumentParser:
