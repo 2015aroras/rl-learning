@@ -158,11 +158,8 @@ class A2CLearner(Learner):
         self.__reset_workers()
         self.i_worker: int = 0
 
-    def get_current_worker(self) -> _WorkerData:
-        return self.worker_data_list[self.i_worker]
-
     def start_episode(self) -> None:
-        # worker: _WorkerData = self.get_current_worker()
+        # worker: _WorkerData = self.__get_current_worker()
         # if worker.get_episode_state() is EpisodeState.FINISHED:
         #     self.worker_data_list[self.i_worker] = _WorkerData()
         pass
@@ -171,7 +168,7 @@ class A2CLearner(Learner):
                                 reward: float,
                                 observation: Any,
                                 done: bool) -> None:
-        worker_data: _WorkerData = self.get_current_worker()
+        worker_data: _WorkerData = self.__get_current_worker()
         if worker_data.get_episode_state() is not EpisodeState.IN_PROGRESS:
             raise RuntimeError('Cannot set reward while episode is not in progress.')
 
@@ -183,7 +180,7 @@ class A2CLearner(Learner):
             self.__next_worker()
 
     def end_episode(self) -> None:
-        worker: _WorkerData = self.get_current_worker()
+        worker: _WorkerData = self.__get_current_worker()
         if worker.get_episode_state() is not EpisodeState.IN_PROGRESS:
             raise RuntimeError('Cannot end episode if episode is not in progress.')
 
@@ -198,7 +195,7 @@ class A2CLearner(Learner):
             np.arange(np.size(np_out_probs)),
             p=np_out_probs)
 
-        worker_data: _WorkerData = self.get_current_worker()
+        worker_data: _WorkerData = self.__get_current_worker()
         worker_time: int = len(worker_data)
 
         action = self._get_action_from_index(action_index)
@@ -211,6 +208,9 @@ class A2CLearner(Learner):
         worker_data.append(action_data)
 
         return action
+
+    def __get_current_worker(self) -> _WorkerData:
+        return self.worker_data_list[self.i_worker]
 
     def __next_worker(self) -> None:
         if len(self.worker_data_list[self.i_worker]) == 0:
