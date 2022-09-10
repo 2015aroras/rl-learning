@@ -1,6 +1,6 @@
 import abc
-from abc import abstractmethod
 import logging
+from abc import abstractmethod
 from typing import Any, List, Union
 
 import numpy as np
@@ -10,6 +10,7 @@ from gym.spaces.discrete import Discrete
 from gym.spaces.space import Space
 from torch import Tensor
 from torch.types import Number
+from torch.utils.tensorboard import SummaryWriter
 
 logger = logging.getLogger(__name__)
 
@@ -24,10 +25,12 @@ class Learner(abc.ABC):
     def __init__(self,
                  observation_space: Space,
                  action_space: Space,
+                 tb_writer: SummaryWriter,
                  discretized_dim_steps: int = DISCRETIZED_DIM_STEPS):
 
         self.observation_space = observation_space
         self.action_space = action_space
+        self.tb_writer = tb_writer
         self.discretized_dim_steps = discretized_dim_steps
 
     @abstractmethod

@@ -9,6 +9,7 @@ from torch import nn
 from torch.functional import Tensor
 from torch.nn import functional as F
 from torch.nn.parameter import Parameter
+from torch.utils.tensorboard import SummaryWriter
 
 from learner.shared.base_learner import Learner
 from learner.shared.episode_state import EpisodeState
@@ -130,13 +131,14 @@ class A2CLearner(Learner):
     def __init__(self,
                  observation_space: Space,
                  action_space: Space,
+                 tb_writer: SummaryWriter,
                  worker_count: Optional[int] = None,
                  discount: Optional[float] = None,
                  lr: Optional[float] = None,
                  entropy_regularizer: Optional[float] = None,
                  update_interval: Optional[int] = None):
 
-        super().__init__(observation_space, action_space)
+        super().__init__(observation_space, action_space, tb_writer)
 
         self.discount: float = DEFAULT_DISCOUNT if discount is None else discount
         self.lr: float = DEFAULT_LR if lr is None else lr

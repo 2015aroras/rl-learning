@@ -4,9 +4,12 @@ import logging
 import typing
 import gym
 from gym.core import Env
+from torch.utils.tensorboard import SummaryWriter
 
 from learner.a2c_learner import A2CLearner
 from tester.learner_tester import LearnerTester
+
+LOG_PATH = './tb_logs/a2c/'
 
 logger = logging.getLogger(__name__)
 
@@ -17,11 +20,13 @@ class A2CTester(LearnerTester):
                  episode_count: int,
                  max_episode_length: int,
                  render_mode: str = 'human'):
+        self.tb_writer: SummaryWriter = SummaryWriter(LOG_PATH, flush_secs=1)
         self.env_name: str = env_name
         self.main_env: Env = gym.make(env_name)
         learner: A2CLearner = A2CLearner(
             self.main_env.observation_space,
-            self.main_env.action_space
+            self.main_env.action_space,
+            self.tb_writer
         )
         super().__init__(learner)
 
@@ -65,7 +70,10 @@ class A2CTester(LearnerTester):
                 i_episode += 1
                 workers_i_time[i_worker] = 0
                 if i_worker == 0:
-                    yield sum(main_env_curr_episode_reward)
+                    ep_reward = sum(main_env_curr_episode_reward)
+                    yield ep_reward
+                    self.tb_writer.add_scalar('ep_reward', ep_reward, global_step=i_episode)
+
                     main_env_curr_episode_reward = []
 
             else:

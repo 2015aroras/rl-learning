@@ -2,10 +2,8 @@ import enum
 import logging
 import typing
 from argparse import ArgumentParser, Namespace
-from typing import Generator, List, Optional
+from typing import Optional
 
-import matplotlib.pyplot as plt
-import numpy as np
 from tester.a2c_tester import A2CTester
 from tester.learner_tester import LearnerTester
 from tester.reinforce_tester import ReinforceTester
@@ -45,22 +43,7 @@ def test_learner(learner_type: LearnerType, args: Namespace) -> None:
     else:
         raise NotImplementedError(f'Learner type not yet supported: {learner_type}')
 
-    plt.ion()
-    plt.xlabel('Episode')
-    plt.ylabel('Total Reward')
-
-    episode_rewards: Generator[float, None, None] = learner_tester.test()
-    y_episode_rewards: List[float] = []
-    for episode_reward in episode_rewards:
-        y_episode_rewards.append(episode_reward)
-
-        past_10_rewards_mean = [np.mean(y_episode_rewards[max(t-9, 0):t+1])
-                                for t in range(len(y_episode_rewards))]
-
-        plt.plot(y_episode_rewards)
-        plt.plot(past_10_rewards_mean)
-
-    plt.show(block=True)
+    list(learner_tester.test())
 
 
 def get_arg_parser() -> ArgumentParser:

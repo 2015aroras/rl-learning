@@ -5,7 +5,6 @@ from typing import Any, Generator, List, Tuple
 
 import numpy as np
 from gym.core import Env
-
 from learner.shared import Learner
 
 logger = logging.getLogger(__name__)

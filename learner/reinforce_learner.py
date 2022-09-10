@@ -1,15 +1,14 @@
-from typing import Any, Dict, List, Optional
+from typing import Any, List, Optional
 
 import numpy as np
 import torch
-import torch.nn.functional as F
 from gym.spaces.space import Space
 from torch import nn
 from torch.functional import Tensor
-from torch.nn.parameter import Parameter
+from torch.utils.tensorboard import SummaryWriter
 
-from learner.shared.episode_state import EpisodeState
 from learner.shared.base_learner import Learner
+from learner.shared.episode_state import EpisodeState
 from learner.shared.utils import Utils
 
 DEFAULT_DISCOUNT: float = 0.9
@@ -20,39 +19,36 @@ class _PolicyNetwork(nn.Module):
     def __init__(self, input_dim: int, hidden_dim: int, output_dim: int):
         super().__init__()
 
-        self.fc_layer1 = nn.Linear(input_dim, hidden_dim)
-        self.fc_layer2 = nn.Linear(hidden_dim, output_dim)
+        self.network = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, output_dim),
+        )
 
     def forward(self, nn_input: Tensor) -> Tensor:
-        hidden_layer_input: Tensor = F.relu(self.fc_layer1.forward(nn_input))
-        return F.softmax(self.fc_layer2.forward(hidden_layer_input), -1)
-
-    def zero_grad(self, set_to_none: bool = False) -> None:
-        super().zero_grad(set_to_none=set_to_none)
-        self.fc_layer1.zero_grad(set_to_none=set_to_none)
-        self.fc_layer2.zero_grad(set_to_none=set_to_none)
+        return self.network.forward(nn_input)
 
 
 class _ActionData():
     def __init__(self,
                  time: int,
-                 probability: Optional[Tensor] = None,
+                 prob_logit: Optional[Tensor] = None,
                  reward: Optional[float] = None):
         self.__time = time
-        self.__probability = probability
+        self.__prob_logit = prob_logit
         self.__reward = reward
 
     def get_time(self) -> int:
         return self.__time
 
-    def get_probability(self) -> Tensor:
-        if self.__probability is None:
-            raise RuntimeError('Probability is not initialized.')
+    def get_prob_logit(self) -> Tensor:
+        if self.__prob_logit is None:
+            raise RuntimeError('prob_logit is not initialized.')
 
-        return self.__probability
+        return self.__prob_logit
 
-    def set_probability(self, probability: Tensor) -> None:
-        self.__probability = probability
+    def set_prob_logit(self, prob_logit: Tensor) -> None:
+        self.__prob_logit = prob_logit
 
     def get_reward(self) -> float:
         if self.__reward is None:
@@ -68,11 +64,12 @@ class ReinforceLearner(Learner):
     def __init__(self,
                  observation_space: Space,
                  action_space: Space,
+                 tb_writer: SummaryWriter,
                  hidden_dim: Optional[int] = None,
                  discount: Optional[float] = None,
                  lr: Optional[float] = None):
 
-        super().__init__(observation_space, action_space)
+        super().__init__(observation_space, action_space, tb_writer)
 
         input_dim: int = self._get_observation_space_dim()
         output_dim: int = self._get_action_space_size()
@@ -81,6 +78,7 @@ class ReinforceLearner(Learner):
         self.policy_network = _PolicyNetwork(input_dim, hidden_dim, output_dim)
         self.discount = DEFAULT_DISCOUNT if discount is None else discount
         self.lr = DEFAULT_LR if lr is None else lr
+        self.optimizer = torch.optim.Adam(self.policy_network.parameters(), self.lr)
 
         self.episode_state: EpisodeState = EpisodeState.FINISHED
         self.episode_actions: List[_ActionData] = []
@@ -113,50 +111,34 @@ class ReinforceLearner(Learner):
 
     def get_action(self, state: Any) -> Any:
         nn_input: Tensor = self._parse_state(state).float()
-        output_probabilities: Tensor = self.policy_network.forward(nn_input)
+        output_logits: Tensor = self.policy_network.forward(nn_input)
 
-        np_out_probs: np.ndarray = output_probabilities.detach().numpy()
         action_index: int = np.random.choice(
-            np.arange(np.size(np_out_probs)),
-            p=np_out_probs)
+            output_logits.numel(),
+            p=torch.softmax(output_logits, -1).detach().numpy())
 
         action = self._get_action_from_index(action_index)
 
         time: int = len(self.episode_actions)
-        action_probability: Tensor = output_probabilities[action_index]
-        action_data: _ActionData = _ActionData(time, probability=action_probability)
+        action_logit: Tensor = output_logits[action_index]
+        action_data: _ActionData = _ActionData(time, prob_logit=action_logit)
         self.episode_actions.append(action_data)
 
         return action
 
     def __update_policy(self):
         rewards: List[float] = [action.get_reward() for action in self.episode_actions]
-        action_probs: List[Tensor] = [action.get_probability() for action in self.episode_actions]
+        action_logits: List[Tensor] = [action.get_prob_logit() for action in self.episode_actions]
 
         utilities: Tensor = Utils.get_utilities(rewards, self.discount)
         whitened_utilities: Tensor = (utilities - utilities.mean()) / (utilities.std() + 1e-9)
 
-        # Determine the weight changes needed using backprop
-        weight_log_grads_by_time: List[Dict[Parameter, Tensor]] = []
+        self.optimizer.zero_grad()
+
         for t in range(len(rewards)):
-            action_log_prob: Tensor = torch.log(action_probs[t])
-            self.policy_network.zero_grad()
-            action_log_prob.backward()
-
-            weight_log_grads_by_time.append({})
-            for weight in self.policy_network.parameters():
-                if weight in weight_log_grads_by_time[t]:
-                    raise RuntimeError(f'Param already processed: {weight}')
-                if weight.grad is None:
-                    raise RuntimeError(f'Backprop not yet called for {weight}')
-
-                log_grad: Tensor = weight.grad.clone().detach()
-                weight_log_grads_by_time[t][weight] = log_grad
-
-        # Update the weights
-        for t in range(len(rewards)):
-            weight_log_grads = weight_log_grads_by_time[t]
+            action_log_prob: Tensor = torch.log_softmax(action_logits[t], -1)
             utility = whitened_utilities[t]
-            for weight in self.policy_network.parameters():
-                with torch.no_grad():
-                    weight += self.lr * utility * weight_log_grads[weight]
+            timestep_reward_grad = self.lr * utility * action_log_prob
+            timestep_reward_grad.backward()
+
+        self.optimizer.step()
